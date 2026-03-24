@@ -117,7 +117,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"⏬ Начинаю скачивание...\n\n"
         f"Формат: {'Видео ' + quality if format_type == 'video' else 'Аудио ' + quality.upper()}\n"
-        f"Пожалуйста, подожди..."
+        f"Пожалуйста, подожди... (это может занять до минуты)"
     )
     
     try:
@@ -125,11 +125,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.UPLOAD_DOCUMENT)
         
         if format_type == 'video':
-            # Download video
-            file_path = download_video(video_data['url'], quality)
-            file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+            # Download video with better error handling
+            try:
+                file_path = download_video(video_data['url'], quality)
+            except Exception as e:
+                # Если не получилось с новым форматом, пробуем старый способ
+                logger.warning(f"First attempt failed: {e}, trying fallback")
+                file_path = download_video_fallback(video_data['url'], quality)
             
-            # Check file size limit
+            file_size = os.path.getsize(file_path) / (1024 * 1024)
+            
             if file_size > Config.MAX_FILE_SIZE:
                 await query.edit_message_text(
                     f"❌ Файл слишком большой ({file_size:.1f} МБ).\n"
@@ -139,7 +144,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cleanup_file(file_path)
                 return
             
-            # Send video
             with open(file_path, 'rb') as video_file:
                 await context.bot.send_video(
                     chat_id=user_id,
@@ -149,11 +153,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 
         else:  # audio
-            # Download audio
             file_path = download_audio(video_data['url'], quality)
-            file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+            file_size = os.path.getsize(file_path) / (1024 * 1024)
             
-            # Check file size limit
             if file_size > Config.MAX_FILE_SIZE:
                 await query.edit_message_text(
                     f"❌ Файл слишком большой ({file_size:.1f} МБ).\n"
@@ -162,7 +164,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cleanup_file(file_path)
                 return
             
-            # Send audio
             with open(file_path, 'rb') as audio_file:
                 await context.bot.send_audio(
                     chat_id=user_id,
@@ -171,21 +172,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     performer="YouTube"
                 )
         
-        # Clean up file
         cleanup_file(file_path)
         
-        # Send success message
         await query.message.reply_text(
             "✅ Готово! Файл успешно загружен.\n\n"
             "📌 Можешь отправить другую ссылку для продолжения."
         )
         
-        # Remove stored video info
         del user_videos[user_id]
         
     except Exception as e:
         logger.error(f"Error downloading: {e}")
         await query.edit_message_text(
-            "❌ Произошла ошибка при скачивании.\n"
-            "Пожалуйста, попробуй другую ссылку или формат."
+            f"❌ Произошла ошибка при скачивании.\n\n"
+            f"Ошибка: {str(e)[:200]}\n\n"
+            f"Попробуй:\n"
+            f"• Выбрать другое качество\n"
+            f"• Скачать аудио вместо видео\n"
+            f"• Использовать другую ссылку"
         )
