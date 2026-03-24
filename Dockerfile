@@ -1,21 +1,32 @@
-FROM python:3.9-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install ffmpeg
+# Устанавливаем ffmpeg и зависимости
 RUN apt-get update && \
-    apt-get install -y ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y \
+    ffmpeg \
+    ca-certificates \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Обновляем yt-dlp до последней версии
+RUN pip install --upgrade pip && \
+    pip install --upgrade yt-dlp
+
+# Копируем requirements и устанавливаем зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
+# Копируем код
 COPY . .
 
-# Create downloads directory
+# Создаем папку для загрузок
 RUN mkdir -p downloads
 
-# Run bot
+# Проверяем установку
+RUN python -c "import yt_dlp; print(f'yt-dlp version: {yt_dlp.version.__version__}')"
+
+# Запускаем бота
 CMD ["python", "main.py"]
