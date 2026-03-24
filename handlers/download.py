@@ -38,7 +38,7 @@ async def process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     
     try:
-        # Get video info
+        # Get video info with better error handling
         video_info = get_video_info(url)
         
         # Store video info for this user
@@ -83,11 +83,17 @@ async def process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"Error processing YouTube URL: {e}")
         await processing_msg.delete()
-        await message.reply_text(
-            "❌ Не удалось получить информацию о видео.\n"
-            "Проверь ссылку и попробуй снова."
+        
+        # Показываем понятную ошибку
+        error_message = (
+            "❌ Не удалось получить информацию о видео.\n\n"
+            "Возможные причины:\n"
+            "• Видео недоступно в вашем регионе\n"
+            "• Видео имеет возрастное ограничение\n"
+            "• Ссылка недействительна\n\n"
+            "Попробуйте другую ссылку или подождите несколько минут и повторите попытку."
         )
-
+        await message.reply_text(error_message)
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback from inline keyboard"""
     query = update.callback_query
