@@ -16,13 +16,29 @@ def get_video_info(url):
     """Get video information without downloading"""
     logger.info(f"Getting info for: {url}")
     
+    # Оптимизированные настройки для обхода блокировок
     ydl_opts = {
         'quiet': True,
         'no_warnings': False,
-        'extract_flat': False,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'geo_bypass': True,
         'ignoreerrors': True,
+        'extract_flat': False,
+        'geo_bypass': True,
+        'geo_bypass_country': 'US',
+        # Критически важные настройки
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],  # Эмулируем Android клиент
+                'skip': ['dash', 'hls'],  # Пропускаем проблемные форматы
+                'player_skip': ['webpage', 'configs'],  # Ускоряем загрузку
+            }
+        },
+        'format': 'best[height<=720]/best',  # Простой формат
+        'user_agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.210 Mobile Safari/537.36',
+        'headers': {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        }
     }
     
     try:
@@ -37,24 +53,52 @@ def get_video_info(url):
                 'duration': info.get('duration', 0),
                 'thumbnail': info.get('thumbnail', ''),
                 'uploader': info.get('uploader', 'Unknown'),
-                'formats': info.get('formats', [])  # Сохраняем доступные форматы
             }
             
-            logger.info(f"Success! Title: {result['title']}, Duration: {result['duration']}s")
+            logger.info(f"Success! Title: {result['title']}")
             return result
             
     except Exception as e:
         logger.error(f"Error getting video info: {e}")
-        raise Exception(f"Failed to get video information: {str(e)}")
+        
+        # Вторая попытка с другими настройками
+        try:
+            logger.info("Trying alternative method...")
+            alt_opts = {
+                'quiet': True,
+                'no_warnings': False,
+                'ignoreerrors': True,
+                'geo_bypass': True,
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android'],
+                        'player_skip': ['webpage', 'configs'],
+                    }
+                },
+                'format': 'best',
+                'user_agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 13; GB)',
+            }
+            
+            with yt_dlp.YoutubeDL(alt_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info:
+                    return {
+                        'title': info.get('title', 'Unknown'),
+                        'duration': info.get('duration', 0),
+                        'thumbnail': info.get('thumbnail', ''),
+                        'uploader': info.get('uploader', 'Unknown')
+                    }
+        except Exception as e2:
+            logger.error(f"Alternative method failed: {e2}")
+            
+        raise Exception("Failed to get video information. YouTube is blocking the request.")
 
 def download_video(url, quality):
     """Download video with specified quality"""
     try:
-        # Сначала получаем информацию о видео
         video_info = get_video_info(url)
         title = sanitize_filename(video_info['title'])
         
-        # Карта качества для выбора формата
         quality_map = {
             '360': '360',
             '720': '720',
@@ -63,21 +107,21 @@ def download_video(url, quality):
         
         target_height = quality_map.get(quality, '720')
         
-        # Обновленные настройки для yt-dlp
         ydl_opts = {
             'quiet': True,
             'no_warnings': False,
+            'ignoreerrors': True,
+            'geo_bypass': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                    'player_skip': ['webpage', 'configs'],
+                }
+            },
+            'format': f'bestvideo[height<={target_height}]+bestaudio/best[height<={target_height}]/best',
             'outtmpl': os.path.join(Config.DOWNLOAD_PATH, f'{title}.%(ext)s'),
             'merge_output_format': 'mp4',
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'geo_bypass': True,
-            # Новый способ выбора формата
-            'format': f'bestvideo[height<={target_height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={target_height}]/best',
-            'format_sort': ['res', 'codec:avc:m4a'],  # Сортировка форматов
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
+            'user_agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 13; GB)',
         }
         
         logger.info(f"Downloading video with quality {quality}p")
@@ -88,17 +132,20 @@ def download_video(url, quality):
             
             # Проверяем существование файла
             if not os.path.exists(filename):
-                # Пробуем другие расширения
                 base, _ = os.path.splitext(filename)
                 for ext in ['.mp4', '.webm', '.mkv']:
                     test_file = base + ext
                     if os.path.exists(test_file):
                         filename = test_file
-                        logger.info(f"Found file: {filename}")
                         break
             
             if not os.path.exists(filename):
-                raise Exception("Downloaded file not found")
+                # Пробуем найти любой видеофайл
+                files = [f for f in os.listdir(Config.DOWNLOAD_PATH) if f.startswith(title)]
+                if files:
+                    filename = os.path.join(Config.DOWNLOAD_PATH, files[0])
+                else:
+                    raise Exception("Downloaded file not found")
             
             logger.info(f"Download complete: {filename}")
             return filename
@@ -116,10 +163,17 @@ def download_audio(url, format='mp3'):
         ydl_opts = {
             'quiet': True,
             'no_warnings': False,
+            'ignoreerrors': True,
+            'geo_bypass': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                    'player_skip': ['webpage', 'configs'],
+                }
+            },
             'format': 'bestaudio/best',
             'outtmpl': os.path.join(Config.DOWNLOAD_PATH, f'{title}.%(ext)s'),
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'geo_bypass': True,
+            'user_agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 13; GB)',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': format,
@@ -133,7 +187,6 @@ def download_audio(url, format='mp3'):
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
             
-            # Меняем расширение на нужный формат
             base, _ = os.path.splitext(filename)
             filename = f"{base}.{format}"
             
