@@ -1,7 +1,7 @@
 import os
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackContext
+from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 from config import Config
 from utils.youtube import download_video, download_audio, get_video_info, cleanup_file
@@ -9,7 +9,6 @@ from utils.youtube import download_video, download_audio, get_video_info, cleanu
 logger = logging.getLogger(__name__)
 
 # Store user states and video info
-user_states = {}
 user_videos = {}
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -38,14 +37,15 @@ async def process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     
     try:
-        # Get video info with better error handling
+        # Get video info
         video_info = get_video_info(url)
         
         # Store video info for this user
         user_videos[user_id] = {
             'url': url,
             'title': video_info['title'],
-            'duration': video_info['duration']
+            'duration': video_info['duration'],
+            'uploader': video_info.get('uploader', 'YouTube')
         }
         
         # Create inline keyboard for format selection
@@ -69,7 +69,8 @@ async def process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         info_text = (
             f"📹 *{video_info['title']}*\n\n"
-            f"⏱ Длительность: {duration_min}:{duration_sec:02d}\n\n"
+            f"👤 {video_info.get('uploader', 'YouTube')}\n"
+            f"⏱ {duration_min}:{duration_sec:02d}\n\n"
             f"Выбери формат для скачивания:"
         )
         
@@ -83,26 +84,24 @@ async def process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"Error processing YouTube URL: {e}")
         await processing_msg.delete()
-        
-        # Показываем понятную ошибку
-        error_message = (
-            "❌ Не удалось получить информацию о видео.\n\n"
-            "Возможные причины:\n"
-            "• Видео недоступно в вашем регионе\n"
-            "• Видео имеет возрастное ограничение\n"
-            "• Ссылка недействительна\n\n"
-            "Попробуйте другую ссылку или подождите несколько минут и повторите попытку."
+        await message.reply_text(
+            "❌ Не удалось получить информацию о видео.\n"
+            "Проверь ссылку и попробуй снова."
         )
-        await message.reply_text(error_message)
+
+# ⭐ ЭТА ФУНКЦИЯ ОБРАБАТЫВАЕТ НАЖАТИЯ НА КНОПКИ
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback from inline keyboard"""
     query = update.callback_query
+    user_id = update.effective_user.id
+    
+    # Обязательно отвечаем на callback, чтобы убрать "часики" на кнопке
     await query.answer()
     
-    user_id = update.effective_user.id
+    # Получаем данные из кнопки
     callback_data = query.data
     
-    # Get video info for this user
+    # Получаем сохраненную информацию о видео
     video_data = user_videos.get(user_id)
     if not video_data:
         await query.edit_message_text(
@@ -110,40 +109,37 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Parse format
+    # Парсим данные кнопки (например: "video_360" или "audio_mp3")
     format_type, quality = callback_data.split('_')
     
-    # Notify user about download start
+    # Сообщаем пользователю о начале скачивания
     await query.edit_message_text(
         f"⏬ Начинаю скачивание...\n\n"
-        f"Формат: {'Видео ' + quality if format_type == 'video' else 'Аудио ' + quality.upper()}\n"
-        f"Пожалуйста, подожди... (это может занять до минуты)"
+        f"📹 {video_data['title'][:50]}...\n"
+        f"📀 Формат: {'Видео ' + quality if format_type == 'video' else 'Аудио ' + quality.upper()}\n\n"
+        f"⏳ Пожалуйста, подожди. Это может занять до минуты."
     )
     
     try:
-        # Send typing action
+        # Отправляем действие "загрузка"
         await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.UPLOAD_DOCUMENT)
         
         if format_type == 'video':
-            # Download video with better error handling
-            try:
-                file_path = download_video(video_data['url'], quality)
-            except Exception as e:
-                # Если не получилось с новым форматом, пробуем старый способ
-                logger.warning(f"First attempt failed: {e}, trying fallback")
-                file_path = download_video_fallback(video_data['url'], quality)
-            
+            # Скачиваем видео
+            file_path = download_video(video_data['url'], quality)
             file_size = os.path.getsize(file_path) / (1024 * 1024)
             
+            # Проверяем размер файла
             if file_size > Config.MAX_FILE_SIZE:
                 await query.edit_message_text(
                     f"❌ Файл слишком большой ({file_size:.1f} МБ).\n"
                     f"Telegram ограничивает размер файлов {Config.MAX_FILE_SIZE} МБ.\n"
-                    f"Попробуй выбрать более низкое качество."
+                    f"Попробуй выбрать более низкое качество или аудио."
                 )
                 cleanup_file(file_path)
                 return
             
+            # Отправляем видео
             with open(file_path, 'rb') as video_file:
                 await context.bot.send_video(
                     chat_id=user_id,
@@ -153,6 +149,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 
         else:  # audio
+            # Скачиваем аудио
             file_path = download_audio(video_data['url'], quality)
             file_size = os.path.getsize(file_path) / (1024 * 1024)
             
@@ -164,28 +161,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cleanup_file(file_path)
                 return
             
+            # Отправляем аудио
             with open(file_path, 'rb') as audio_file:
                 await context.bot.send_audio(
                     chat_id=user_id,
                     audio=audio_file,
                     title=video_data['title'],
-                    performer="YouTube"
+                    performer=video_data.get('uploader', 'YouTube')
                 )
         
+        # Удаляем временный файл
         cleanup_file(file_path)
         
+        # Отправляем сообщение об успехе
         await query.message.reply_text(
             "✅ Готово! Файл успешно загружен.\n\n"
             "📌 Можешь отправить другую ссылку для продолжения."
         )
         
+        # Удаляем сохраненную информацию
         del user_videos[user_id]
         
     except Exception as e:
         logger.error(f"Error downloading: {e}")
         await query.edit_message_text(
             f"❌ Произошла ошибка при скачивании.\n\n"
-            f"Ошибка: {str(e)[:200]}\n\n"
+            f"Ошибка: {str(e)[:150]}\n\n"
             f"Попробуй:\n"
             f"• Выбрать другое качество\n"
             f"• Скачать аудио вместо видео\n"
