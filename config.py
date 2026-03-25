@@ -7,7 +7,7 @@ class Config:
     BOT_TOKEN = os.getenv('BOT_TOKEN')
     MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 50))  # MB
     DOWNLOAD_PATH = os.getenv('DOWNLOAD_PATH', 'downloads')
-    
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')  # Добавляем AI ключ
     # Video formats
     VIDEO_QUALITIES = {
         '360p': '360',
@@ -25,3 +25,5 @@ class Config:
     def validate(cls):
         if not cls.BOT_TOKEN:
             raise ValueError("BOT_TOKEN not found in environment variables")
+        if not cls.GEMINI_API_KEY:
+            print("⚠️  Warning: GEMINI_API_KEY not set. AI features will be disabled.")
