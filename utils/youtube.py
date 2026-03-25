@@ -16,22 +16,29 @@ def get_video_info(url):
     """Get video information without downloading"""
     logger.info(f"Getting info for: {url}")
     
-    # Настройки для обхода PO Token требований
+    # Оптимизированные настройки для обхода блокировок
     ydl_opts = {
         'quiet': True,
         'no_warnings': False,
         'ignoreerrors': True,
         'extract_flat': False,
         'geo_bypass': True,
-        # Используем только web клиент, который требует меньше токенов
+        'geo_bypass_country': 'US',
+        # Критически важные настройки
         'extractor_args': {
             'youtube': {
-                'player_client': ['web'],  # Используем web вместо android
-                'player_skip': ['webpage', 'configs', 'js'],  # Пропускаем проблемные части
+                'player_client': ['android', 'web'],  # Эмулируем Android клиент
+                'skip': ['dash', 'hls'],  # Пропускаем проблемные форматы
+                'player_skip': ['webpage', 'configs'],  # Ускоряем загрузку
             }
         },
         'format': 'best[height<=720]/best',  # Простой формат
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'user_agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.210 Mobile Safari/537.36',
+        'headers': {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        }
     }
     
     try:
@@ -64,12 +71,12 @@ def get_video_info(url):
                 'geo_bypass': True,
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['web'],
+                        'player_client': ['android'],
                         'player_skip': ['webpage', 'configs'],
                     }
                 },
                 'format': 'best',
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'user_agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 13; GB)',
             }
             
             with yt_dlp.YoutubeDL(alt_opts) as ydl:
@@ -84,7 +91,7 @@ def get_video_info(url):
         except Exception as e2:
             logger.error(f"Alternative method failed: {e2}")
             
-        raise Exception("Failed to get video information. Try again later.")
+        raise Exception("Failed to get video information. YouTube is blocking the request.")
 
 def download_video(url, quality):
     """Download video with specified quality"""
@@ -107,14 +114,14 @@ def download_video(url, quality):
             'geo_bypass': True,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['web'],
+                    'player_client': ['android'],
                     'player_skip': ['webpage', 'configs'],
                 }
             },
-            'format': f'best[height<={target_height}]/best',
+            'format': f'bestvideo[height<={target_height}]+bestaudio/best[height<={target_height}]/best',
             'outtmpl': os.path.join(Config.DOWNLOAD_PATH, f'{title}.%(ext)s'),
             'merge_output_format': 'mp4',
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'user_agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 13; GB)',
         }
         
         logger.info(f"Downloading video with quality {quality}p")
@@ -160,13 +167,13 @@ def download_audio(url, format='mp3'):
             'geo_bypass': True,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['web'],
+                    'player_client': ['android'],
                     'player_skip': ['webpage', 'configs'],
                 }
             },
             'format': 'bestaudio/best',
             'outtmpl': os.path.join(Config.DOWNLOAD_PATH, f'{title}.%(ext)s'),
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'user_agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 13; GB)',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': format,
