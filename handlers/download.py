@@ -1,14 +1,14 @@
 import os
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackContext
+from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 from config import Config
 from utils.youtube import download_video, download_audio, get_video_info, cleanup_file
+from utils.ai_tags import generate_tags, generate_tags_simple
 
 logger = logging.getLogger(__name__)
 
-user_states = {}
 user_videos = {}
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -16,7 +16,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     text = message.text
     
-    # Check if message is YouTube URL
     if 'youtube.com' in text or 'youtu.be' in text:
         await process_youtube_url(update, context, text)
     else:
@@ -32,22 +31,38 @@ async def process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     
     processing_msg = await message.reply_text(
-        "🔍 Получаю информацию о видео...\n\n"
-        "⚠️ YouTube может обрабатывать запрос до 30 секунд. Пожалуйста, подожди."
+        "🔍 Получаю информацию о видео..."
     )
     
     try:
         # Get video info
         video_info = get_video_info(url)
         
+        # Генерируем теги с помощью ИИ
+        ai_msg = await message.reply_text(
+            "🤖 ИИ анализирует видео и генерирует теги..."
+        )
+        
+        tags = None
+        if Config.GEMINI_API_KEY:
+            tags = await generate_tags(
+                video_info['title'], 
+                video_info.get('description', ''),
+                video_info.get('duration', 0)
+            )
+        else:
+            tags = await generate_tags_simple(video_info['title'])
+        
         # Store video info for this user
         user_videos[user_id] = {
             'url': url,
             'title': video_info['title'],
-            'duration': video_info['duration']
+            'duration': video_info['duration'],
+            'uploader': video_info.get('uploader', 'YouTube'),
+            'tags': tags  # Сохраняем теги
         }
         
-        # Create inline keyboard
+        # Create inline keyboard for format selection
         keyboard = [
             [
                 InlineKeyboardButton("🎥 360p", callback_data="video_360"),
@@ -62,18 +77,29 @@ async def process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Format message with video info
+        # Format message with video info and AI tags
         duration_min = int(video_info['duration']) // 60
         duration_sec = int(video_info['duration']) % 60
         
+        # Формируем текст с тегами
+        tags_text = ""
+        if tags and tags.get('hashtags'):
+            tags_text = f"\n\n🏷 *Популярные теги:*\n{' '.join(tags['hashtags'][:10])}"
+            
+            if tags.get('keywords'):
+                tags_text += f"\n\n🔑 *Ключевые слова:*\n{', '.join(tags['keywords'][:5])}"
+        
         info_text = (
             f"📹 *{video_info['title']}*\n\n"
-            f"👤 {video_info['uploader']}\n"
-            f"⏱ {duration_min}:{duration_sec:02d}\n\n"
-            f"Выбери формат для скачивания:"
+            f"👤 {video_info.get('uploader', 'YouTube')}\n"
+            f"⏱ {duration_min}:{duration_sec:02d}\n"
+            f"{tags_text}\n\n"
+            f"✨ *Выбери формат для скачивания:*"
         )
         
         await processing_msg.delete()
+        await ai_msg.delete()
+        
         await message.reply_text(
             info_text,
             reply_markup=reply_markup,
@@ -83,26 +109,18 @@ async def process_youtube_url(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"Error processing YouTube URL: {e}")
         await processing_msg.delete()
-        
-        error_message = (
-            "❌ Не удалось получить информацию о видео.\n\n"
-            "Возможные причины:\n"
-            "• Видео недоступно\n"
-            "• YouTube временно блокирует запросы\n"
-            "• Ссылка недействительна\n\n"
-            "Попробуй:\n"
-            "• Подождать 1-2 минуты\n"
-            "• Использовать другое видео\n"
-            "• Скачать аудио вместо видео"
+        await message.reply_text(
+            "❌ Не удалось получить информацию о видео.\n"
+            "Проверь ссылку и попробуй снова."
         )
-        await message.reply_text(error_message)
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback from inline keyboard"""
     query = update.callback_query
+    user_id = update.effective_user.id
+    
     await query.answer()
     
-    user_id = update.effective_user.id
     callback_data = query.data
     
     video_data = user_videos.get(user_id)
@@ -124,6 +142,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.UPLOAD_DOCUMENT)
         
+        caption_text = f"📹 {video_data['title']}\nКачество: {quality}p\n\n"
+        
+        # Добавляем теги в описание
+        if video_data.get('tags') and video_data['tags'].get('hashtags'):
+            caption_text += f"🏷 {' '.join(video_data['tags']['hashtags'][:10])}\n\n"
+        
+        caption_text += "⬇️ Скачано с помощью YouTube Downloader Bot"
+        
         if format_type == 'video':
             file_path = download_video(video_data['url'], quality)
             file_size = os.path.getsize(file_path) / (1024 * 1024)
@@ -141,11 +167,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_video(
                     chat_id=user_id,
                     video=video_file,
-                    caption=f"📹 {video_data['title']}\nКачество: {quality}p\n\n⬇️ Скачано с помощью YouTube Downloader Bot",
+                    caption=caption_text,
                     supports_streaming=True
                 )
                 
-        else:
+        else:  # audio
             file_path = download_audio(video_data['url'], quality)
             file_size = os.path.getsize(file_path) / (1024 * 1024)
             
@@ -163,7 +189,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     audio=audio_file,
                     title=video_data['title'],
                     performer=video_data.get('uploader', 'YouTube'),
-                    caption="⬇️ Скачано с помощью YouTube Downloader Bot"
+                    caption=caption_text
                 )
         
         cleanup_file(file_path)
@@ -183,6 +209,5 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Попробуй:\n"
             f"• Выбрать другое качество\n"
             f"• Скачать аудио вместо видео\n"
-            f"• Использовать другую ссылку\n"
-            f"• Подождать 5-10 минут"
+            f"• Использовать другую ссылку"
         )
