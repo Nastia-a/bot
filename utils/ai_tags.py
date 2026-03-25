@@ -1,85 +1,99 @@
 import google.generativeai as genai
 import logging
 import os
+import asyncio
 from config import Config
 
 logger = logging.getLogger(__name__)
 
 # Настройка Gemini AI
+model = None
 try:
-    if Config.GEMINI_API_KEY:
+    if Config.GEMINI_API_KEY and Config.GEMINI_API_KEY != 'your_gemini_api_key_here':
         genai.configure(api_key=Config.GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-pro')
-        logger.info("Gemini AI initialized successfully")
+        logger.info("✅ Gemini AI initialized successfully")
     else:
-        logger.warning("GEMINI_API_KEY not found, AI features disabled")
-        model = None
+        logger.warning("⚠️ GEMINI_API_KEY not found or invalid, AI features disabled")
 except Exception as e:
-    logger.error(f"Failed to initialize Gemini: {e}")
-    model = None
+    logger.error(f"❌ Failed to initialize Gemini: {e}")
 
 async def generate_tags(video_title, video_description="", duration=0):
-    """Generate hashtags and keywords for video using AI"""
+    """Generate hashtags and keywords for video using AI with timeout"""
     
     if not model:
         logger.warning("AI model not available")
         return None
     
     try:
-        # Формируем промпт для AI
+        # Ограничиваем время выполнения AI запроса
+        result = await asyncio.wait_for(
+            _generate_tags_async(video_title, video_description, duration),
+            timeout=10.0  # 10 секунд максимум
+        )
+        return result
+        
+    except asyncio.TimeoutError:
+        logger.error("AI request timed out after 10 seconds")
+        return None
+    except Exception as e:
+        logger.error(f"Error generating tags with AI: {e}")
+        return None
+
+async def _generate_tags_async(video_title, video_description, duration):
+    """Actual AI generation function"""
+    
+    try:
+        # Формируем короткий и понятный промпт
         prompt = f"""
-        You are a social media marketing expert. Generate relevant hashtags and keywords for this YouTube video:
+        Generate 8-10 relevant hashtags for this YouTube video:
         
         Title: {video_title}
-        Description: {video_description[:500]}...
-        Duration: {duration} seconds
         
-        Please provide:
-        1. 10-15 relevant hashtags (with #)
-        2. 5-7 keywords (without #)
+        Return ONLY hashtags separated by spaces, nothing else.
+        Example: #tech #youtube #viral
         
-        Format your response like this:
-        HASHTAGS: #tag1 #tag2 #tag3
-        KEYWORDS: keyword1, keyword2, keyword3
-        
-        Make hashtags specific to the content, popular but not overly generic.
+        Make hashtags specific to the content.
         """
         
         # Запрашиваем у AI
         response = model.generate_content(prompt)
         
-        # Парсим ответ
-        text = response.text
-        
         # Извлекаем хэштеги
-        hashtags = []
-        keywords = []
+        text = response.text.strip()
         
-        lines = text.split('\n')
-        for line in lines:
-            if line.startswith('HASHTAGS:'):
-                hashtags = line.replace('HASHTAGS:', '').strip().split(' ')
-            elif line.startswith('KEYWORDS:'):
-                keywords = line.replace('KEYWORDS:', '').strip().split(', ')
+        # Разбиваем на хэштеги
+        hashtags = []
+        for word in text.split():
+            if word.startswith('#') and len(word) > 1:
+                hashtags.append(word)
+            elif word.startswith('#'):
+                hashtags.append(word)
+        
+        # Если нет хэштегов, создаем из названия
+        if not hashtags:
+            words = video_title.lower().split()[:5]
+            hashtags = ['#' + w for w in words if len(w) > 3]
         
         return {
-            'hashtags': hashtags[:15],  # Максимум 15 тегов
-            'keywords': keywords[:7],    # Максимум 7 ключевых слов
-            'full_response': text
+            'hashtags': hashtags[:10],  # Максимум 10 тегов
+            'keywords': [],
+            'full_response': ' '.join(hashtags[:5])
         }
         
     except Exception as e:
-        logger.error(f"Error generating tags with AI: {e}")
+        logger.error(f"AI generation error: {e}")
         return None
 
 async def generate_tags_simple(video_title):
     """Simple tag generation without API (fallback)"""
     
     # Простая генерация тегов из названия
-    words = video_title.lower().split()
+    import re
+    words = re.sub(r'[^\w\s]', '', video_title).lower().split()
     
-    # Очищаем слова
-    stop_words = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'with']
+    # Убираем стоп-слова
+    stop_words = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'with', 'of', 'is', 'it']
     keywords = [w for w in words if w not in stop_words and len(w) > 3]
     
     # Создаем хэштеги
