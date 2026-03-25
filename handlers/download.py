@@ -148,8 +148,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if video_data.get('tags') and video_data['tags'].get('hashtags'):
             caption_text += f"🏷 {' '.join(video_data['tags']['hashtags'][:10])}\n\n"
         
-        caption_text += "⬇️ Скачано с помощью YouTube Downloader Bot"
-        
         if format_type == 'video':
             file_path = download_video(video_data['url'], quality)
             file_size = os.path.getsize(file_path) / (1024 * 1024)
